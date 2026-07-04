@@ -1,0 +1,17 @@
+# MacOS system files
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Rust / Cargo
+/rust/target/
+/rust/Cargo.lock
+
+# Xcode / SwiftUI / iOS development
+**/build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/project.xcworkspace/xcuserdata/
+*.xcworkspace/xcuserdata/
+.xcworkspace/
+.dependency-info.json

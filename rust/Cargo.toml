@@ -1,0 +1,29 @@
+[package]
+name = "container-client"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.85"
+description = "Rust client for Apple container-apiserver via XPC"
+license = "Apache-2.0"
+
+[lib]
+name = "container_client"
+# rlib  — normal Rust consumption
+# staticlib — link into Swift/C without a dylib dependency
+# cdylib — optional dynamic lib for testing
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[dependencies]
+libc = "0.2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[build-dependencies]
+cbindgen = "0.28"
+
+[lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+# Allow these in an FFI-heavy crate
+missing_errors_doc = "allow"
+missing_panics_doc = "allow"
+module_name_repetitions = "allow"
