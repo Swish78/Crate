@@ -1,16 +1,13 @@
 import Foundation
 
-/// Swift wrapper for the Rust container-client library.
-///
-/// Drop this file and `container_client.h` into your Xcode project
-/// to communicate directly with the macOS container-apiserver.
+/// Swift wrapper for the Rust container-client library to communicate directly with the macOS container-apiserver.
 public struct ContainerAPI {
     
     /// Struct representing a container.
     public struct Container: Codable, Identifiable {
         public let id: String
         public let status: String
-        public let image: String
+        public let image: String?
     }
     
     /// Struct representing resource stats of a container.
@@ -54,8 +51,8 @@ public struct ContainerAPI {
         }
         
         // Check for error payload: {"error": "..."}
-        if let errObj = try? JSONDecoder().decode([String: String].self, from: data),
-           let errorMsg = errObj["error"] {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let errorMsg = json["error"] as? String {
             return .failure(.apiError(message: errorMsg))
         }
         
@@ -80,8 +77,8 @@ public struct ContainerAPI {
         }
         
         // Check for error payload: {"error": "..."}
-        if let errObj = try? JSONDecoder().decode([String: String].self, from: data),
-           let errorMsg = errObj["error"] {
+        if let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+           let errorMsg = json["error"] as? String {
             return .failure(.apiError(message: errorMsg))
         }
         
