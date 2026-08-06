@@ -12,16 +12,67 @@ use std::collections::HashMap;
 ///
 /// We intentionally use `#[serde(deny_unknown_fields)]` **off** here so
 /// the crate keeps working if the server adds new fields.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ContainerSnapshot {
     pub id: String,
     pub status: String,
-    #[serde(default)]
-    pub image: String,
-    /// Additional fields are captured here so nothing is silently lost.
+    pub image: Option<String>,
+    pub started_date: Option<f64>,
+    pub ipv4_address: Option<String>,
     #[serde(flatten)]
     pub extra: HashMap<String, serde_json::Value>,
+}
+
+impl<'de> Deserialize<'de> for ContainerSnapshot {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawSnapshot {
+            status: String,
+            configuration: RawConfig,
+            started_date: Option<f64>,
+            networks: Option<Vec<RawNetwork>>,
+            #[serde(flatten)]
+            extra: HashMap<String, serde_json::Value>,
+        }
+        
+        #[derive(Deserialize)]
+        #[serde(rename_all = "camelCase")]
+        struct RawConfig {
+            id: String,
+            image: Option<RawImage>,
+        }
+        
+        #[derive(Deserialize, Default)]
+        #[serde(rename_all = "camelCase")]
+        struct RawImage {
+            reference: String,
+        }
+        
+        #[derive(Deserialize, Default)]
+        #[serde(rename_all = "camelCase")]
+        struct RawNetwork {
+            ipv4_address: Option<String>,
+        }
+        
+        let raw = RawSnapshot::deserialize(deserializer)?;
+        let ip = raw.networks
+            .and_then(|nets| nets.into_iter().next())
+            .and_then(|net| net.ipv4_address);
+            
+        Ok(ContainerSnapshot {
+            id: raw.configuration.id,
+            status: raw.status,
+            image: raw.configuration.image.map(|i| i.reference),
+            started_date: raw.started_date,
+            ipv4_address: ip,
+            extra: raw.extra,
+        })
+    }
 }
 
 /// Filters sent with `containerList`.

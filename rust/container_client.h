@@ -5,6 +5,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdbool.h>
 
 /**
  * Opaque XPC connection handle.
@@ -20,6 +21,14 @@ typedef void *xpc_object_t;
  * Block/function-pointer type for `xpc_connection_set_event_handler`.
  */
 typedef void (*XpcHandler)(xpc_object_t);
+
+char *container_delete(const char *container_id, bool force);
+
+char *container_run(const char *image);
+
+char *container_stop(const char *container_id);
+
+char *container_start(const char *container_id);
 
 /**
  * Returns a JSON array of containers.
@@ -39,6 +48,20 @@ char *container_list_json(void);
  * - The returned pointer must be freed with [`container_free_string`].
  */
 char *container_stats_json(const char *container_id);
+
+/**
+ * Returns a JSON object with raw file descriptors for a container's log
+ * streams: `{"stdioFd": <int>, "bootFd": <int>}`.
+ *
+ * Ownership of both descriptors transfers to the caller — read from them
+ * (e.g. wrap in `FileHandle` on the Swift side) and `close()` when done.
+ *
+ * # Safety
+ *
+ * - `container_id` must be a valid, NUL-terminated C string.
+ * - The returned pointer must be freed with [`container_free_string`].
+ */
+char *container_log_fds(const char *container_id);
 
 /**
  * Free a string previously returned by this library.
@@ -66,6 +89,8 @@ extern xpc_object_t xpc_connection_send_message_with_reply_sync(xpc_connection_t
 extern xpc_object_t xpc_dictionary_create_empty(void);
 
 extern void xpc_dictionary_set_string(xpc_object_t xdict, const char *key, const char *value);
+
+extern void xpc_dictionary_set_bool(xpc_object_t xdict, const char *key, bool value);
 
 extern void xpc_dictionary_set_data(xpc_object_t xdict,
                                     const char *key,
