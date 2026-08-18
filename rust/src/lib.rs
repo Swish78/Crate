@@ -35,7 +35,7 @@ use xpc::{Connection, XpcDict, ROUTE_KEY};
 
 use std::ffi::{CStr, CString, c_char};
 use std::fs::File;
-use std::os::unix::io::FromRawFd;
+use std::os::unix::io::{FromRawFd, IntoRawFd};
 
 /// Mach service name registered by `container system start`.
 const SERVICE: &str = "com.apple.container.apiserver";
@@ -120,6 +120,69 @@ pub fn get_log_files(container_id: &str) -> Result<(File, File), Error> {
     Ok((stdio, boot))
 }
 
+/// Delete a container by ID.
+pub fn delete_container(container_id: &str, force: bool) -> Result<(), Error> {
+    let conn = Connection::open(SERVICE)?;
+    
+    let msg = XpcDict::new();
+    msg.set_string(ROUTE_KEY, "containerDelete");
+    msg.set_string("id", container_id);
+    msg.set_bool("forceDelete", force);
+    
+    conn.send_sync(&msg)?;
+    Ok(())
+}
+
+/// Run a container using the CLI as a subprocess.
+pub fn run_container(image: &str) -> Result<String, Error> {
+    let output = std::process::Command::new("/usr/local/bin/container")
+        .arg("run")
+        .arg("-d")
+        .arg(image)
+        .output()
+        .map_err(|e| Error::Io(e))?;
+        
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr).into_owned();
+        return Err(Error::Xpc(err_msg));
+    }
+    
+    let stdout = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    Ok(stdout)
+}
+
+/// Stop a running container using the CLI.
+pub fn stop_container(container_id: &str) -> Result<(), Error> {
+    let output = std::process::Command::new("/usr/local/bin/container")
+        .arg("stop")
+        .arg(container_id)
+        .output()
+        .map_err(|e| Error::Io(e))?;
+        
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr).into_owned();
+        return Err(Error::Xpc(err_msg));
+    }
+    
+    Ok(())
+}
+
+/// Start a stopped container using the CLI.
+pub fn start_container(container_id: &str) -> Result<(), Error> {
+    let output = std::process::Command::new("/usr/local/bin/container")
+        .arg("start")
+        .arg(container_id)
+        .output()
+        .map_err(|e| Error::Io(e))?;
+        
+    if !output.status.success() {
+        let err_msg = String::from_utf8_lossy(&output.stderr).into_owned();
+        return Err(Error::Xpc(err_msg));
+    }
+    
+    Ok(())
+}
+
 // ── C / Swift FFI ───────────────────────────────────────────────────────
 //
 // Convention: every function returns a `*mut c_char` pointing to a
@@ -128,6 +191,67 @@ pub fn get_log_files(container_id: &str) -> Result<(File, File), Error> {
 //
 // The caller **must** pass the pointer to `container_free_string` when
 // done.
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn container_delete(
+    container_id: *const c_char,
+    force: bool,
+) -> *mut c_char {
+    let id = match unsafe { validate_c_str(container_id) } {
+        Ok(s) => s,
+        Err(ptr) => return ptr,
+    };
+
+    match delete_container(id, force) {
+        Ok(_) => cstring_into_raw(r#"{"success":true}"#.to_string()),
+        Err(e) => error_json(&e.to_string()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn container_run(
+    image: *const c_char,
+) -> *mut c_char {
+    let img = match unsafe { validate_c_str(image) } {
+        Ok(s) => s,
+        Err(ptr) => return ptr,
+    };
+
+    match run_container(img) {
+        Ok(id) => cstring_into_raw(format!(r#"{{"id":"{}"}}"#, id)),
+        Err(e) => error_json(&e.to_string()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn container_stop(
+    container_id: *const c_char,
+) -> *mut c_char {
+    let id = match unsafe { validate_c_str(container_id) } {
+        Ok(s) => s,
+        Err(ptr) => return ptr,
+    };
+
+    match stop_container(id) {
+        Ok(_) => cstring_into_raw(r#"{"success":true}"#.to_string()),
+        Err(e) => error_json(&e.to_string()),
+    }
+}
+
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn container_start(
+    container_id: *const c_char,
+) -> *mut c_char {
+    let id = match unsafe { validate_c_str(container_id) } {
+        Ok(s) => s,
+        Err(ptr) => return ptr,
+    };
+
+    match start_container(id) {
+        Ok(_) => cstring_into_raw(r#"{"success":true}"#.to_string()),
+        Err(e) => error_json(&e.to_string()),
+    }
+}
 
 /// Returns a JSON array of containers.
 ///
@@ -160,6 +284,35 @@ pub unsafe extern "C" fn container_stats_json(
 
     match get_stats(id).and_then(|s| Ok(serde_json::to_string(&s)?)) {
         Ok(json) => cstring_into_raw(json),
+        Err(e) => error_json(&e.to_string()),
+    }
+}
+
+/// Returns a JSON object with raw file descriptors for a container's log
+/// streams: `{"stdioFd": <int>, "bootFd": <int>}`.
+///
+/// Ownership of both descriptors transfers to the caller — read from them
+/// (e.g. wrap in `FileHandle` on the Swift side) and `close()` when done.
+///
+/// # Safety
+///
+/// - `container_id` must be a valid, NUL-terminated C string.
+/// - The returned pointer must be freed with [`container_free_string`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn container_log_fds(
+    container_id: *const c_char,
+) -> *mut c_char {
+    let id = match unsafe { validate_c_str(container_id) } {
+        Ok(s) => s,
+        Err(ptr) => return ptr,
+    };
+
+    match get_log_files(id) {
+        Ok((stdio, boot)) => {
+            let stdio_fd = stdio.into_raw_fd();
+            let boot_fd = boot.into_raw_fd();
+            cstring_into_raw(format!(r#"{{"stdioFd":{stdio_fd},"bootFd":{boot_fd}}}"#))
+        }
         Err(e) => error_json(&e.to_string()),
     }
 }

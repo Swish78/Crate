@@ -65,6 +65,13 @@ impl XpcDict {
             ffi::xpc_dictionary_set_string(self.ptr, c_key.as_ptr(), c_val.as_ptr());
         }
     }
+    
+    pub fn set_bool(&self, key: &str, value: bool) {
+        let c_key = CString::new(key).expect("key contains interior NUL");
+        unsafe {
+            ffi::xpc_dictionary_set_bool(self.ptr, c_key.as_ptr(), value);
+        }
+    }
 
     pub fn set_data(&self, key: &str, bytes: &[u8]) {
         let c_key = CString::new(key).expect("key contains interior NUL");
@@ -160,12 +167,6 @@ pub struct Connection {
     ptr: ffi::xpc_connection_t,
 }
 
-/// No-op event handler required by XPC before `xpc_connection_activate`.
-///
-/// We use an `extern "C" fn` instead of a block to avoid pulling in
-/// block-runtime dependencies.  The apiserver protocol never sends
-/// unsolicited events, so this handler is never meaningfully invoked.
-unsafe extern "C" fn noop_event_handler(_event: ffi::xpc_object_t) {}
 
 impl Connection {
     /// Connect to the named Mach service.
@@ -184,8 +185,45 @@ impl Connection {
             return Err(Error::Xpc("xpc_connection_create_mach_service returned NULL".into()));
         }
 
+        // We must pass a valid Objective-C Block to xpc_connection_set_event_handler.
+        // We construct a simple stack block here. xpc_connection_set_event_handler will Block_copy it.
+        #[repr(C)]
+        struct BlockDescriptor {
+            reserved: libc::c_ulong,
+            size: libc::c_ulong,
+            copy: Option<unsafe extern "C" fn(*mut libc::c_void, *mut libc::c_void)>,
+            dispose: Option<unsafe extern "C" fn(*mut libc::c_void)>,
+        }
+        #[repr(C)]
+        struct BlockLiteral {
+            isa: *const libc::c_void,
+            flags: libc::c_int,
+            reserved: libc::c_int,
+            invoke: unsafe extern "C" fn(*mut libc::c_void, ffi::xpc_object_t),
+            descriptor: *const BlockDescriptor,
+        }
+        unsafe extern "C" {
+            static _NSConcreteStackBlock: *const libc::c_void;
+        }
+        unsafe extern "C" fn block_invoke(_ctx: *mut libc::c_void, _event: ffi::xpc_object_t) {}
+        static BLOCK_DESCRIPTOR: BlockDescriptor = BlockDescriptor {
+            reserved: 0,
+            size: std::mem::size_of::<BlockLiteral>() as libc::c_ulong,
+            copy: None,
+            dispose: None,
+        };
+        
+        let handler_block = BlockLiteral {
+            isa: std::ptr::addr_of!(_NSConcreteStackBlock) as *const libc::c_void,
+            flags: 0,
+            reserved: 0,
+            invoke: block_invoke,
+            descriptor: &BLOCK_DESCRIPTOR,
+        };
+
         unsafe {
-            ffi::xpc_connection_set_event_handler(ptr, noop_event_handler);
+            let handler_ptr: ffi::XpcHandler = std::mem::transmute(&handler_block as *const BlockLiteral);
+            ffi::xpc_connection_set_event_handler(ptr, handler_ptr);
             ffi::xpc_connection_activate(ptr);
         }
 

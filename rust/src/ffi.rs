@@ -62,6 +62,12 @@ unsafe extern "C" {
         key: *const c_char,
         value: *const c_char,
     );
+    
+    pub fn xpc_dictionary_set_bool(
+        xdict: xpc_object_t,
+        key: *const c_char,
+        value: bool,
+    );
 
     pub fn xpc_dictionary_set_data(
         xdict: xpc_object_t,
